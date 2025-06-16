@@ -3,10 +3,13 @@ managed:
   enabled: true
   override:
     - file_option: go_package_prefix
-      value: github.com/gilwong00/proto-to-kafra/gen
+      value: github.com/gilwong00/proto-to-kafka/gen
 plugins:
-  - remote: buf.build/protocolbuffers/go
-    out: gen
-    opt: paths=source_relative
-inputs:
-  - directory: proto
+  - local: protoc-gen-go
+    out: .
+    opt:
+      - paths=source_relative
+  - local: go-grpc
+    out: .
+    opt:
+      - paths=source_relative
