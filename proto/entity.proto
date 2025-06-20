@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package entity;
 
-option go_package = "./entitypb";
+// option go_package = "./entitypb";
 
 message Entity {
   string id = 1;
