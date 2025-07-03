@@ -10,8 +10,8 @@ import (
 )
 
 type Config struct {
+	// TODO: update this to an array of strings to support multiple brookers
 	KafkaBroker string
-	KafkaTopic  string
 	ProtoPath   string
 }
 
@@ -32,13 +32,11 @@ func NewConfig() (*Config, error) {
 
 	// Bind specific environment variables to logical keys
 	viper.BindEnv("KAFKA_BROKER")
-	viper.BindEnv("KAFKA_TOPIC")
 	// might not need this
 	viper.BindEnv("PROTO_PATH")
 
 	return &Config{
 		KafkaBroker: viper.GetString("KAFKA_BROKER"),
-		KafkaTopic:  viper.GetString("KAFKA_TOPIC"),
 		ProtoPath:   viper.GetString("PROTO_PATH"),
 	}, nil
 }
