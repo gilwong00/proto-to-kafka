@@ -3,10 +3,11 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/segmentio/kafka-go"
 	kafkago "github.com/segmentio/kafka-go"
 )
 
@@ -51,18 +52,21 @@ func (c *kafkaClient) Ping() error {
 	if len(c.brokers) == 0 {
 		return fmt.Errorf("no Kafka brokers configured")
 	}
-	conn, err := kafka.Dial("tcp", c.brokers[0])
+	conn, err := kafkago.Dial("tcp", c.brokers[0])
 	if err != nil {
 		return fmt.Errorf("failed to connect to Kafka broker: %w", err)
 	}
 	defer conn.Close()
-	// Optional: can add a timeout or metadata check here
 	return nil
 }
 
 // Publish writes a message to the specified Kafka topic.
 //
 // This method is safe to call concurrently from multiple goroutines.
+// If the topic does not exist, it attempts to create it and retries once.
+//
+// It includes a short delay after topic creation to allow Kafka to
+// initialize topic metadata before retrying.
 func (c *kafkaClient) Publish(
 	ctx context.Context,
 	eventName string,
@@ -75,13 +79,36 @@ func (c *kafkaClient) Publish(
 		Key:   key,
 		Value: value,
 		Time:  time.Now(),
-		Headers: []kafka.Header{
+		Headers: []kafkago.Header{
 			{Key: "eventType", Value: []byte(eventName)},
 		},
 	}
+
 	if err := c.writer.WriteMessages(ctx, msg); err != nil {
+		log.Printf("Failed to write to Kafka topic %q: %v", topic, err)
+
+		if isUnknownTopicError(err) {
+			log.Printf("Topic %q not found, attempting to create it...", topic)
+			if createErr := c.createTopic(topic, 1, 1); createErr != nil {
+				return fmt.Errorf("failed to create missing topic %q: %w", topic, createErr)
+			}
+
+			// Wait briefly for Kafka to initialize the new topic
+			time.Sleep(300 * time.Millisecond)
+
+			// Retry publishing the message once
+			if err = c.writer.WriteMessages(ctx, msg); err != nil {
+				return fmt.Errorf("failed to re-publish message after topic creation: %w", err)
+			}
+
+			log.Println("Message published successfully after topic creation")
+			return nil
+		}
+
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
+
+	log.Println("Message published successfully")
 	return nil
 }
 
@@ -99,4 +126,45 @@ func (c *kafkaClient) Close() error {
 // Example output: "topic-f47ac10b-58cc-4372-a567-0e02b2c3d479"
 func (c *kafkaClient) GenerateKey(topic string) []byte {
 	return []byte(fmt.Sprintf("%s-%s", topic, uuid.NewString()))
+}
+
+// createTopic attempts to create a Kafka topic with the specified
+// number of partitions and replication factor.
+// It connects to the first broker to send the create topic request.
+func (c *kafkaClient) createTopic(
+	topic string,
+	partitions int,
+	replicationFactor int,
+) error {
+	if len(c.brokers) == 0 {
+		return fmt.Errorf("no Kafka brokers configured")
+	}
+
+	conn, err := kafkago.Dial("tcp", c.brokers[0])
+	if err != nil {
+		return fmt.Errorf("failed to connect to Kafka broker: %w", err)
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	topicConfig := kafkago.TopicConfig{
+		Topic:             topic,
+		NumPartitions:     partitions,
+		ReplicationFactor: replicationFactor,
+	}
+
+	if err := conn.CreateTopics(topicConfig); err != nil {
+		log.Printf("Failed to create topic %q: %v", topic, err)
+		return fmt.Errorf("failed to create topic: %w", err)
+	}
+
+	log.Printf("Topic %q created successfully", topic)
+	return nil
+}
+
+// isUnknownTopicError checks if the given error indicates
+// that the topic or partition does not exist on the broker.
+func isUnknownTopicError(err error) bool {
+	return strings.Contains(err.Error(), "Unknown Topic Or Partition")
 }

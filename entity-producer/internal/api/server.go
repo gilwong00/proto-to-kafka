@@ -87,6 +87,7 @@ func (s *ApiService) createEntity(w http.ResponseWriter, r *http.Request) {
 		msgBytes,
 	); err != nil {
 		WriteErrorResponse(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	WriteSuccessResponse(w, "entity created")
 }
