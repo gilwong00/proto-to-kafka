@@ -8,3 +8,5 @@ plugins:
   - remote: buf.build/protocolbuffers/go
     out: ./entity-producer/gen
     opt: paths=source_relative
+  - remote: buf.build/community/timostamm-protobuf-ts:v2.11.1
+    out: ./entity-consumer/gen
