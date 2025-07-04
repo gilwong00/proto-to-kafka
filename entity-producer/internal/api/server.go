@@ -46,6 +46,10 @@ func (s ApiService) StartHttpServer() error {
 	// gracefully shutdown the server, waiting max 30 seconds for current operations to complete
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	if err := s.kafkaClient.Close(); err != nil {
+		log.Printf("Error closing Kafka client: %v", err)
+	}
 	return server.Shutdown(ctx)
 }
 
@@ -54,9 +58,6 @@ func (s *ApiService) createEntity(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			log.Printf("Error closing request body: %v", err)
-		}
-		if err := s.kafkaClient.Close(); err != nil {
-			log.Printf("Error closing Kafka client: %v", err)
 		}
 	}()
 

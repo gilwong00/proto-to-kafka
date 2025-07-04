@@ -2,12 +2,15 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
-	"strings"
+	"net"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
+
 	kafkago "github.com/segmentio/kafka-go"
 )
 
@@ -101,26 +104,20 @@ func (c *kafkaClient) Publish(
 			// to all brokers and clients may take a short moment.
 			// We wait briefly here to allow the topic to be fully initialized
 			// before retrying the publish, reducing "Unknown Topic Or Partition" errors.
-			time.Sleep(300 * time.Millisecond)
-
+			time.Sleep(1 * time.Second)
 			// Retry publishing the message once
 			// For more robust handling, consider exponential backoff or other retry strategies.
 			retryErr := c.writer.WriteMessages(ctx, msg)
-			if retryErr != nil {
-				if isUnknownTopicError(retryErr) {
-					// If still unknown topic, maybe log and fail gracefully
-					log.Printf("Retry failed: topic %q still unknown after creation attempt", topic)
-				}
+			if retryErr != nil && isUnknownTopicError(retryErr) {
+				// If still unknown topic, maybe log and fail gracefully
+				log.Printf("Retry failed: topic %q still unknown after creation attempt", topic)
 				return fmt.Errorf("failed to re-publish message after topic creation: %w", retryErr)
 			}
-
 			log.Println("Message published successfully after topic creation")
 			return nil
 		}
-
 		return fmt.Errorf("failed to publish message: %w", err)
 	}
-
 	log.Println("Message published successfully")
 	return nil
 }
@@ -149,28 +146,32 @@ func (c *kafkaClient) createTopic(
 	partitions int,
 	replicationFactor int,
 ) error {
-	if len(c.brokers) == 0 {
-		return fmt.Errorf("no Kafka brokers configured")
-	}
 	conn, err := c.Ping()
 	if err != nil {
-		return fmt.Errorf("failed to connect to Kafka broker: %w", err)
+		return err
 	}
 	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-
-	topicConfig := kafkago.TopicConfig{
+	controller, err := conn.Controller()
+	if err != nil {
+		return err
+	}
+	var controllerConn *kafkago.Conn
+	controllerConn, err = kafkago.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
+	if err != nil {
+		return err
+	}
+	defer controllerConn.Close()
+	controllerConn.SetDeadline(time.Now().Add(10 * time.Second))
+	topicConfigs := kafkago.TopicConfig{
 		Topic:             topic,
 		NumPartitions:     partitions,
 		ReplicationFactor: replicationFactor,
 	}
-
-	if err := conn.CreateTopics(topicConfig); err != nil {
+	err = controllerConn.CreateTopics(topicConfigs)
+	if err != nil {
 		log.Printf("Failed to create topic %q: %v", topic, err)
-		return fmt.Errorf("failed to create topic: %w", err)
+		return err
 	}
-
 	log.Printf("Topic %q created successfully", topic)
 	return nil
 }
@@ -178,5 +179,5 @@ func (c *kafkaClient) createTopic(
 // isUnknownTopicError checks if the given error indicates
 // that the topic or partition does not exist on the broker.
 func isUnknownTopicError(err error) bool {
-	return strings.Contains(err.Error(), "Unknown Topic Or Partition")
+	return errors.Is(err, kafkago.UnknownTopicOrPartition)
 }
