@@ -4,7 +4,7 @@
 // 	protoc        (unknown)
 // source: entity.proto
 
-package genz
+package gen
 
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
@@ -24,6 +24,7 @@ const (
 type Entity struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -65,15 +66,23 @@ func (x *Entity) GetId() string {
 	return ""
 }
 
+func (x *Entity) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 var File_entity_proto protoreflect.FileDescriptor
 
 const file_entity_proto_rawDesc = "" +
 	"\n" +
-	"\fentity.proto\x12\x06entity\"\x18\n" +
+	"\fentity.proto\x12\x06entity\",\n" +
 	"\x06Entity\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02idB{\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04nameBz\n" +
 	"\n" +
-	"com.entityB\vEntityProtoP\x01Z(github.com/gilwong00/proto-to-kafka/genz\xa2\x02\x03EXX\xaa\x02\x06Entity\xca\x02\x06Entity\xe2\x02\x12Entity\\GPBMetadata\xea\x02\x06Entityb\x06proto3"
+	"com.entityB\vEntityProtoP\x01Z'github.com/gilwong00/proto-to-kafka/gen\xa2\x02\x03EXX\xaa\x02\x06Entity\xca\x02\x06Entity\xe2\x02\x12Entity\\GPBMetadata\xea\x02\x06Entityb\x06proto3"
 
 var (
 	file_entity_proto_rawDescOnce sync.Once

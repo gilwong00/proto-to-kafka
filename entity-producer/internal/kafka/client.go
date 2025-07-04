@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
 	kafkago "github.com/segmentio/kafka-go"
 )
 
@@ -14,7 +16,8 @@ import (
 // It manages a shared kafka-go Writer for efficient reuse across multiple
 // publish calls.
 type kafkaClient struct {
-	writer *kafkago.Writer
+	brokers []string
+	writer  *kafkago.Writer
 }
 
 // Compile-time assertion to ensure kafkaClient implements the Client interface.
@@ -36,8 +39,25 @@ func newClient(config *Config) *kafkaClient {
 	}
 
 	return &kafkaClient{
-		writer: writer,
+		brokers: config.Brokers,
+		writer:  writer,
 	}
+}
+
+// Ping attempts to open a TCP connection to the first Kafka broker
+// to verify that it is reachable and accepting connections.
+// It returns an error if the connection fails.
+func (c *kafkaClient) Ping() error {
+	if len(c.brokers) == 0 {
+		return fmt.Errorf("no Kafka brokers configured")
+	}
+	conn, err := kafka.Dial("tcp", c.brokers[0])
+	if err != nil {
+		return fmt.Errorf("failed to connect to Kafka broker: %w", err)
+	}
+	defer conn.Close()
+	// Optional: can add a timeout or metadata check here
+	return nil
 }
 
 // Publish writes a message to the specified Kafka topic.
@@ -45,6 +65,7 @@ func newClient(config *Config) *kafkaClient {
 // This method is safe to call concurrently from multiple goroutines.
 func (c *kafkaClient) Publish(
 	ctx context.Context,
+	eventName string,
 	topic string,
 	key []byte,
 	value []byte,
@@ -54,6 +75,9 @@ func (c *kafkaClient) Publish(
 		Key:   key,
 		Value: value,
 		Time:  time.Now(),
+		Headers: []kafka.Header{
+			{Key: "eventType", Value: []byte(eventName)},
+		},
 	}
 	if err := c.writer.WriteMessages(ctx, msg); err != nil {
 		return fmt.Errorf("failed to publish message: %w", err)
@@ -66,4 +90,13 @@ func (c *kafkaClient) Publish(
 // It should be called exactly once when the application is shutting down.
 func (c *kafkaClient) Close() error {
 	return c.writer.Close()
+}
+
+// GenerateKey generates a unique Kafka message key by concatenating
+// the given topic string with a newly generated UUID.
+// The returned key is a byte slice suitable for use as a Kafka message key.
+//
+// Example output: "topic-f47ac10b-58cc-4372-a567-0e02b2c3d479"
+func (c *kafkaClient) GenerateKey(topic string) []byte {
+	return []byte(fmt.Sprintf("%s-%s", topic, uuid.NewString()))
 }
