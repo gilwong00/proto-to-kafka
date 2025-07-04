@@ -48,16 +48,15 @@ func newClient(config *Config) *kafkaClient {
 // Ping attempts to open a TCP connection to the first Kafka broker
 // to verify that it is reachable and accepting connections.
 // It returns an error if the connection fails.
-func (c *kafkaClient) Ping() error {
+func (c *kafkaClient) Ping() (*kafkago.Conn, error) {
 	if len(c.brokers) == 0 {
-		return fmt.Errorf("no Kafka brokers configured")
+		return nil, fmt.Errorf("no Kafka brokers configured")
 	}
 	conn, err := kafkago.Dial("tcp", c.brokers[0])
 	if err != nil {
-		return fmt.Errorf("failed to connect to Kafka broker: %w", err)
+		return nil, fmt.Errorf("failed to connect to Kafka broker: %w", err)
 	}
-	defer conn.Close()
-	return nil
+	return conn, nil
 }
 
 // Publish writes a message to the specified Kafka topic.
@@ -87,18 +86,32 @@ func (c *kafkaClient) Publish(
 	if err := c.writer.WriteMessages(ctx, msg); err != nil {
 		log.Printf("Failed to write to Kafka topic %q: %v", topic, err)
 
+		// We check for `isUnknownTopicError` because Kafka returns this error
+		// when attempting to write to a topic that does not yet exist.
+		// In many production setups, topics must be created explicitly before use.
+		// However, if auto-creation is enabled or you want to create topics on-demand,
+		// this code attempts to create the topic dynamically.
 		if isUnknownTopicError(err) {
 			log.Printf("Topic %q not found, attempting to create it...", topic)
 			if createErr := c.createTopic(topic, 1, 1); createErr != nil {
 				return fmt.Errorf("failed to create missing topic %q: %w", topic, createErr)
 			}
 
-			// Wait briefly for Kafka to initialize the new topic
+			// Kafka topic creation is asynchronous and metadata propagation
+			// to all brokers and clients may take a short moment.
+			// We wait briefly here to allow the topic to be fully initialized
+			// before retrying the publish, reducing "Unknown Topic Or Partition" errors.
 			time.Sleep(300 * time.Millisecond)
 
 			// Retry publishing the message once
-			if err = c.writer.WriteMessages(ctx, msg); err != nil {
-				return fmt.Errorf("failed to re-publish message after topic creation: %w", err)
+			// For more robust handling, consider exponential backoff or other retry strategies.
+			retryErr := c.writer.WriteMessages(ctx, msg)
+			if retryErr != nil {
+				if isUnknownTopicError(retryErr) {
+					// If still unknown topic, maybe log and fail gracefully
+					log.Printf("Retry failed: topic %q still unknown after creation attempt", topic)
+				}
+				return fmt.Errorf("failed to re-publish message after topic creation: %w", retryErr)
 			}
 
 			log.Println("Message published successfully after topic creation")
@@ -139,8 +152,7 @@ func (c *kafkaClient) createTopic(
 	if len(c.brokers) == 0 {
 		return fmt.Errorf("no Kafka brokers configured")
 	}
-
-	conn, err := kafkago.Dial("tcp", c.brokers[0])
+	conn, err := c.Ping()
 	if err != nil {
 		return fmt.Errorf("failed to connect to Kafka broker: %w", err)
 	}

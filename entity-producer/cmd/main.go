@@ -17,9 +17,11 @@ func main() {
 	// initialize kafka client
 	kafkaClient := kafka.NewClient(config)
 	// test kafka connection
-	if err := kafkaClient.Ping(); err != nil {
+	conn, err := kafkaClient.Ping()
+	if err != nil {
 		log.Fatalf("Error connecting to kafka %v", err)
 	}
+	defer conn.Close()
 	// initialize api server
 	apiServer := api.NewApiService(kafkaClient, config.Port)
 	if err := apiServer.StartHttpServer(); err != nil {

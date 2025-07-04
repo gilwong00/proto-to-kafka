@@ -4,15 +4,21 @@ import (
 	"context"
 
 	"github.com/gilwong00/proto-to-kafka/internal/config"
+
+	kafkago "github.com/segmentio/kafka-go"
 )
 
 // Client represents a Kafka client that can publish messages to Kafka.
 type Client interface {
-	// Ping verifies connectivity to the Kafka cluster by attempting to
-	// establish a TCP connection to at least one broker.
+	// Ping verifies connectivity to the Kafka cluster by establishing
+	// a TCP connection to at least one broker.
 	//
-	// Returns an error if the connection fails.
-	Ping() error
+	// Returns a live connection to the broker if successful,
+	// or an error if the connection fails.
+	//
+	// The caller is responsible for closing the returned connection
+	// to release resources.
+	Ping() (*kafkago.Conn, error)
 	// PublishToKafka publishes messages or events to Kafka.
 	// The context can be used to control cancellation and deadlines.
 	Publish(ctx context.Context, eventName string, topic string, key []byte, value []byte) error
