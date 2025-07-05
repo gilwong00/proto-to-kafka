@@ -1,0 +1,51 @@
+# Builder stage
+FROM node:22-alpine AS builder
+
+RUN apk add --no-cache bash curl
+
+WORKDIR /app
+
+# Copy proto files and buf configs first
+COPY proto ./proto
+COPY buf.yaml .
+COPY buf.gen.yaml .
+
+# Install buf CLI
+RUN curl -sSL https://github.com/bufbuild/buf/releases/latest/download/buf-Linux-x86_64 -o /usr/local/bin/buf \
+    && chmod +x /usr/local/bin/buf
+
+# Run buf generate to generate protobuf code
+RUN buf generate
+
+# Install pnpm globally
+RUN npm install -g pnpm
+
+# Copy pnpm lockfile and package.json for caching
+COPY entity-consumer/pnpm-lock.yaml .
+COPY entity-consumer/package.json .
+
+# Install dependencies using pnpm
+RUN NODE_ENV=production pnpm install --frozen-lockfile --prod --prefer-offline
+
+# Copy all source code for entity-consumer
+COPY entity-consumer ./
+
+# Build the NestJS application
+RUN pnpm run build
+
+# Final image
+FROM node:22-alpine
+
+WORKDIR /app
+
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/pnpm-lock.yaml ./
+
+ENV PORT=3333
+ENV KAKFA_ENDPOINT=localhost:9092
+
+EXPOSE 3333
+
+CMD ["node", "dist/main"]

@@ -121,11 +121,13 @@ The consumer listens to Kafka, decodes Protobuf messages, and processes entity e
 
 ## Makefile Commands
 
-| Command            | Description                                                  |
-| ------------------ | ------------------------------------------------------------ |
-| `make generate`    | Generate Protobuf code for producer and consumer using `buf` |
-| `make docker-up`   | Start Kafka and Zookeeper via Docker Compose                 |
-| `make docker-down` | Stop Kafka and Zookeeper Docker containers                   |
+| Command               | Description                                                  |
+| --------------------- | ------------------------------------------------------------ |
+| `make generate`       | Generate Protobuf code for producer and consumer using `buf` |
+| `make docker-up`      | Start Kafka and Zookeeper via Docker Compose                 |
+| `make docker-down`    | Stop Kafka and Zookeeper Docker containers                   |
+| `make build-producer` | Builds the entity producer image                             |
+| `make build-consumer` | Builds the entity consumer image                             |
 
 ---
 
