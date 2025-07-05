@@ -13,3 +13,8 @@ generate:
 .PHONY: start-producer
 start-producer:
 	cd entity-producer && go run cmd/main.go
+
+.PHONY: build-producer
+build-producer:
+# ideally use a git hash to tag
+	docker build -t entity-producer:$(shell date +%Y%m%d%H%M%S) -f Dockerfile.entity-producer .

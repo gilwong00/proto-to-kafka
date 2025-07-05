@@ -1,0 +1,50 @@
+# Builder stage
+FROM golang:1.22-alpine AS builder
+
+RUN apk add --no-cache git curl bash protobuf protobuf-dev
+
+# Install buf CLI
+RUN curl -sSL https://github.com/bufbuild/buf/releases/latest/download/buf-Linux-x86_64 -o /usr/local/bin/buf \
+    && chmod +x /usr/local/bin/buf
+
+# Copy proto files and buf configs first
+WORKDIR /app
+COPY proto ./proto
+COPY buf.yaml .
+COPY buf.gen.yaml .
+
+# Generate protobuf code (run at project root /app)
+RUN buf generate
+
+# Now set workdir to entity-producer where go.mod lives
+WORKDIR /app/entity-producer
+
+# Copy go.mod and go.sum first for caching dependencies
+COPY entity-producer/go.mod entity-producer/go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy all source code for entity-producer
+COPY entity-producer ./
+
+# Build the Go binary
+RUN go build -o entity-producer ./cmd
+
+# Final stage
+FROM alpine:3.18
+
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /app
+
+# Copy the built binary from the builder stage
+COPY --from=builder /app/entity-producer/entity-producer .
+
+# Normally these aren't defined here but should be loaded in via param store
+ENV PORT=6000
+ENV KAFKA_BROKER=localhost:9092
+
+EXPOSE 6000
+
+CMD ["./entity-producer"]

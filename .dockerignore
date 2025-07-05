@@ -1,0 +1,39 @@
+# Ignore Go build output and temporary files
+bin/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Ignore vendor directory (if any)
+vendor/
+
+# Ignore git metadata
+.git
+.gitignore
+
+# Ignore IDE/editor config files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore OS generated files
+.DS_Store
+Thumbs.db
+
+# Ignore local environment files
+.env
+
+# Ignore logs and temp files
+*.log
+tmp/
+temp/
+
+# Ignore Docker files except Dockerfile (optional)
+docker-compose*.yml
+
+# Ignore node_modules if present
+node_modules/
