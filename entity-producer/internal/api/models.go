@@ -1,5 +1,5 @@
 package api
 
 type CreateEntityPayload struct {
-	name string `json:"name"`
+	Name string `json:"name"`
 }

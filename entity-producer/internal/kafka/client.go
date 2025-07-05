@@ -88,7 +88,6 @@ func (c *kafkaClient) Publish(
 
 	if err := c.writer.WriteMessages(ctx, msg); err != nil {
 		log.Printf("Failed to write to Kafka topic %q: %v", topic, err)
-
 		// We check for `isUnknownTopicError` because Kafka returns this error
 		// when attempting to write to a topic that does not yet exist.
 		// In many production setups, topics must be created explicitly before use.

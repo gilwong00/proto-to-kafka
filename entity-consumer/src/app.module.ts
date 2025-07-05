@@ -1,9 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { KafkaModule } from './kafka/kafka.module';
 import { ConfigModule } from '@nestjs/config';
-import { WorkflowModule } from './workflow/workflow.module';
+import { EntityModule } from './entity/entity.module';
 
 @Module({
   imports: [
@@ -11,8 +10,7 @@ import { WorkflowModule } from './workflow/workflow.module';
       isGlobal: true,
       envFilePath: '.env',
     }),
-    KafkaModule,
-    WorkflowModule,
+    EntityModule,
   ],
   controllers: [AppController],
   providers: [AppService],

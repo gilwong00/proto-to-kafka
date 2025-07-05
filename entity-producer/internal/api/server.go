@@ -73,7 +73,7 @@ func (s *ApiService) createEntity(w http.ResponseWriter, r *http.Request) {
 	}
 	entityPb := &gen.Entity{
 		Id:   entityId.String(),
-		Name: payload.name,
+		Name: payload.Name,
 	}
 	msgBytes, err := proto.Marshal(entityPb)
 	if err != nil {
