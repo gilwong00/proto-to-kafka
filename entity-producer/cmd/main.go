@@ -15,7 +15,10 @@ func main() {
 		panic(err)
 	}
 	// initialize kafka client
-	kafkaClient := kafka.NewClient(config)
+	kafkaClient, err := kafka.NewClient(config)
+	if err != nil {
+		log.Fatalf("Error creating kafka client %v", err)
+	}
 	// test kafka connection
 	conn, err := kafkaClient.Ping()
 	if err != nil {

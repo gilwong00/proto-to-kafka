@@ -27,12 +27,11 @@ type Config struct {
 // then uses Viper to retrieve typed configuration values.
 func NewConfig() (*Config, error) {
 	// Load .env in dev if present
-	if _, err := os.Stat(".env"); err == nil {
+	if _, err := os.Stat("../../.env"); err != nil {
 		if err := godotenv.Load(); err != nil {
 			return nil, fmt.Errorf("error loading .env file: %v", err)
 		}
 	}
-
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 

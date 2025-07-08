@@ -2,7 +2,6 @@ package kafka
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -10,9 +9,22 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
 	kafkago "github.com/segmentio/kafka-go"
 )
+
+const (
+	maxRetryAttempts    = 3
+	defaultRetryBackoff = 200 * time.Millisecond
+)
+
+// pendingMessage holds the details for a Kafka message to retry.
+type pendingMessage struct {
+	ctx       context.Context
+	eventName string
+	topic     string
+	key       []byte
+	value     []byte
+}
 
 // kafkaClient is a concrete implementation of the Client interface
 // that publishes messages to Kafka using the provided configuration.
@@ -20,20 +32,20 @@ import (
 // It manages a shared kafka-go Writer for efficient reuse across multiple
 // publish calls.
 type kafkaClient struct {
-	brokers []string
-	writer  *kafkago.Writer
+	brokers    []string
+	writer     *kafkago.Writer
+	retryQueue chan pendingMessage
 }
 
 // Compile-time assertion to ensure kafkaClient implements the Client interface.
 var _ Client = (*kafkaClient)(nil)
 
 // newClient creates a new kafkaClient instance configured with the given Config.
-// This constructor is unexported to enforce creation via NewClient.
-//
-// The returned client maintains a single underlying kafka-go Writer,
-// which establishes connections lazily upon first use and reuses them
-// for subsequent messages.
-func newClient(config *Config) *kafkaClient {
+// It lazily establishes connections and reuses a shared kafka-go Writer.
+func newClient(config *Config) (*kafkaClient, error) {
+	if len(config.Brokers) == 0 {
+		return nil, fmt.Errorf("no Kafka brokers configured")
+	}
 	writer := &kafkago.Writer{
 		Addr:         kafkago.TCP(config.Brokers...),
 		Balancer:     &kafkago.LeastBytes{},
@@ -41,16 +53,15 @@ func newClient(config *Config) *kafkaClient {
 		Async:        false,
 		BatchTimeout: 10 * time.Millisecond,
 	}
-
 	return &kafkaClient{
-		brokers: config.Brokers,
-		writer:  writer,
-	}
+		brokers:    config.Brokers,
+		writer:     writer,
+		retryQueue: make(chan pendingMessage, 1000),
+	}, nil
 }
 
 // Ping attempts to open a TCP connection to the first Kafka broker
 // to verify that it is reachable and accepting connections.
-// It returns an error if the connection fails.
 func (c *kafkaClient) Ping() (*kafkago.Conn, error) {
 	if len(c.brokers) == 0 {
 		return nil, fmt.Errorf("no Kafka brokers configured")
@@ -63,12 +74,7 @@ func (c *kafkaClient) Ping() (*kafkago.Conn, error) {
 }
 
 // Publish writes a message to the specified Kafka topic.
-//
-// This method is safe to call concurrently from multiple goroutines.
-// If the topic does not exist, it attempts to create it and retries once.
-//
-// It includes a short delay after topic creation to allow Kafka to
-// initialize topic metadata before retrying.
+// It checks for topic existence and creates it if necessary.
 func (c *kafkaClient) Publish(
 	ctx context.Context,
 	eventName string,
@@ -76,49 +82,25 @@ func (c *kafkaClient) Publish(
 	key []byte,
 	value []byte,
 ) error {
-	msg := kafkago.Message{
-		Topic: topic,
-		Key:   key,
-		Value: value,
-		Time:  time.Now(),
-		Headers: []kafkago.Header{
-			{Key: "eventType", Value: []byte(eventName)},
-		},
+	topics, err := c.ListTopics()
+	if err != nil {
+		return err
 	}
-
-	if err := c.writer.WriteMessages(ctx, msg); err != nil {
-		log.Printf("Failed to write to Kafka topic %q: %v", topic, err)
-		// We check for `isUnknownTopicError` because Kafka returns this error
-		// when attempting to write to a topic that does not yet exist.
-		// In many production setups, topics must be created explicitly before use.
-		// However, if auto-creation is enabled or you want to create topics on-demand,
-		// this code attempts to create the topic dynamically.
-		if isUnknownTopicError(err) {
-			log.Printf("Topic %q not found, attempting to create it...", topic)
-			if createErr := c.createTopic(topic, 1, 1); createErr != nil {
-				return fmt.Errorf("failed to create missing topic %q: %w", topic, createErr)
-			}
-
-			// Kafka topic creation is asynchronous and metadata propagation
-			// to all brokers and clients may take a short moment.
-			// We wait briefly here to allow the topic to be fully initialized
-			// before retrying the publish, reducing "Unknown Topic Or Partition" errors.
-			time.Sleep(1 * time.Second)
-			// Retry publishing the message once
-			// For more robust handling, consider exponential backoff or other retry strategies.
-			retryErr := c.writer.WriteMessages(ctx, msg)
-			if retryErr != nil && isUnknownTopicError(retryErr) {
-				// If still unknown topic, maybe log and fail gracefully
-				log.Printf("Retry failed: topic %q still unknown after creation attempt", topic)
-				return fmt.Errorf("failed to re-publish message after topic creation: %w", retryErr)
-			}
-			log.Println("Message published successfully after topic creation")
-			return nil
+	doesExist := false
+	for _, topicName := range topics {
+		if topic == topicName {
+			doesExist = true
+			break
 		}
-		return fmt.Errorf("failed to publish message: %w", err)
 	}
-	log.Println("Message published successfully")
-	return nil
+	if !doesExist {
+		if err := c.createTopic(topic, 1, 1); err != nil {
+			return fmt.Errorf("failed to create topic: %w", err)
+		}
+		// Give Kafka time to propagate topic metadata
+		time.Sleep(500 * time.Millisecond)
+	}
+	return c.queueMessage(ctx, eventName, topic, key, value, 0)
 }
 
 // Close gracefully shuts down the Kafka writer and releases any resources.
@@ -137,6 +119,28 @@ func (c *kafkaClient) GenerateKey(topic string) []byte {
 	return []byte(fmt.Sprintf("%s-%s", topic, uuid.NewString()))
 }
 
+// ListTopics retrieves all topic names from Kafka.
+func (c *kafkaClient) ListTopics() ([]string, error) {
+	conn, err := kafkago.Dial("tcp", c.brokers[0])
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to Kafka broker: %w", err)
+	}
+	defer conn.Close()
+	partitions, err := conn.ReadPartitions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read partitions: %w", err)
+	}
+	topicMap := make(map[string]struct{})
+	for _, p := range partitions {
+		topicMap[p.Topic] = struct{}{}
+	}
+	var topics []string
+	for topic := range topicMap {
+		topics = append(topics, topic)
+	}
+	return topics, nil
+}
+
 // createTopic attempts to create a Kafka topic with the specified
 // number of partitions and replication factor.
 // It connects to the first broker to send the create topic request.
@@ -145,19 +149,18 @@ func (c *kafkaClient) createTopic(
 	partitions int,
 	replicationFactor int,
 ) error {
-	conn, err := c.Ping()
+	conn, err := kafkago.Dial("tcp", c.brokers[0])
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to Kafka broker: %w", err)
 	}
 	defer conn.Close()
 	controller, err := conn.Controller()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get Kafka controller: %w", err)
 	}
-	var controllerConn *kafkago.Conn
-	controllerConn, err = kafkago.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
+	controllerConn, err := kafkago.Dial("tcp", net.JoinHostPort(controller.Host, strconv.Itoa(controller.Port)))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to connect to controller broker: %w", err)
 	}
 	defer controllerConn.Close()
 	controllerConn.SetDeadline(time.Now().Add(10 * time.Second))
@@ -166,8 +169,7 @@ func (c *kafkaClient) createTopic(
 		NumPartitions:     partitions,
 		ReplicationFactor: replicationFactor,
 	}
-	err = controllerConn.CreateTopics(topicConfigs)
-	if err != nil {
+	if err := controllerConn.CreateTopics(topicConfigs); err != nil {
 		log.Printf("Failed to create topic %q: %v", topic, err)
 		return err
 	}
@@ -175,8 +177,49 @@ func (c *kafkaClient) createTopic(
 	return nil
 }
 
-// isUnknownTopicError checks if the given error indicates
-// that the topic or partition does not exist on the broker.
-func isUnknownTopicError(err error) bool {
-	return errors.Is(err, kafkago.UnknownTopicOrPartition)
+// queueMessage attempts to publish a message and retries on failure.
+// If all attempts fail, the message is enqueued for background retry.
+func (c *kafkaClient) queueMessage(
+	ctx context.Context,
+	eventName string,
+	topic string,
+	key []byte,
+	value []byte,
+	retryBackoff time.Duration,
+) error {
+	if retryBackoff == 0 {
+		retryBackoff = defaultRetryBackoff
+	}
+	msg := kafkago.Message{
+		Topic: topic,
+		Key:   key,
+		Value: value,
+		Time:  time.Now(),
+		Headers: []kafkago.Header{
+			{Key: "eventType", Value: []byte(eventName)},
+		},
+	}
+	var lastErr error
+	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+		err := c.writer.WriteMessages(ctx, msg)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		log.Printf("Publish attempt %d failed: %v", attempt, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt) * retryBackoff):
+		}
+	}
+	log.Printf("All %d publish attempts failed, enqueuing for retry", maxRetryAttempts)
+	select {
+	case c.retryQueue <- pendingMessage{ctx, eventName, topic, key, value}:
+		log.Println("Message enqueued for retry")
+	default:
+		log.Println("Retry queue full, dropping message")
+		return fmt.Errorf("retry queue full, dropping message: %w", lastErr)
+	}
+	return lastErr
 }
